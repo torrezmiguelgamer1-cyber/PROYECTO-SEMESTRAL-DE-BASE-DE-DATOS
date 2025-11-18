@@ -156,15 +156,16 @@ def ventana_captcha(callback):
               font=("Arial", 16), width=20, command=abrir_captcha).pack(pady=20)
 
     tk.Button(
-        cap,
-        text="Verificar",
-        bg=COLOR_BOTON_PRINCIPAL,
-        fg="white",
-        font=("Arial", 16),
-        width=20,
-        command=lambda: verificar_captcha(lambda: cap.after(10, cap.destroy()) or callback())
-    ).pack(pady=20)
-
+    cap,
+    text="Verificar",
+    bg=COLOR_BOTON_PRINCIPAL,
+    fg="white",
+    font=("Arial", 16),
+    width=20,
+    command=lambda: verificar_captcha(
+        lambda: (cap.destroy(), callback())
+    )
+     ).pack(pady=20)
 
 # ------------------ PREGUNTAS ------------------
 PREGUNTAS = {
@@ -340,7 +341,7 @@ def login():
     contrasena = entry_contrasena.get()
     usuario_id, puntuacion = iniciar_sesion(nombre, contrasena)
     if usuario_id:
-        ventana.destroy()
+        ventana.withdraw()
         ventana_captcha(lambda: jugar(usuario_id, nombre, puntuacion))
 
 
