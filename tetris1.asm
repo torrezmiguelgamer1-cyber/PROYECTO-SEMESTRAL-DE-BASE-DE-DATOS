@@ -388,7 +388,8 @@ zero_cell_p2:
     mov al,0
 
 write_cell_p2:
-    mov board[dx],al
+    mov bx, dx
+    mov board[bx], al
 
     inc dx
     loop copy_cells_p2
