@@ -1,43 +1,115 @@
+; ============================================================
+; TETRIS PRO REAL - PARTE 1
+; Motor principal + estructura base sólida
+; ============================================================
+
 .model small
 .stack 200h
 
-.data
-
+; =========================
+; CONSTANTES
+; =========================
 WIDTH  equ 10
 HEIGHT equ 20
 
+; =========================
+; DATA
+; =========================
+.data
+
+; TABLERO (10x20)
 board db 200 dup(0)
 
+; PIEZA ACTUAL
 piece_x db 4
 piece_y db 0
+piece_type db 0
+piece_rot db 0
 
-; pieza simple 2x2 (estable)
-piece db 0,0, 1,0, 0,1, 1,1
+; SIGUIENTE PIEZA
+next_type db 1
 
+; SCORE
 score dw 0
 lines dw 0
 level db 1
+
 game_over db 0
 
+; TIMING
 tick dw 0
-speed dw 8
+speed dw 15
 
+; =========================
+; TEXTOS
+; =========================
 msg_score db 'SCORE:$'
 msg_lines db 'LINES:$'
 msg_level db 'LEVEL:$'
+msg_next  db 'NEXT:$'
 msg_over  db 'GAME OVER$'
 
+; =========================
+; PIEZAS (SIN MATRICES RARAS)
+; Formato: dx,dy x4 bloques x4 rotaciones
+; =========================
+
+pieces:
+
+; I
+db 0,0,1,0,2,0,3,0
+db 1,0,1,1,1,2,1,3
+db 0,1,1,1,2,1,3,1
+db 2,0,2,1,2,2,2,3
+
+; O
+db 0,0,1,0,0,1,1,1
+db 0,0,1,0,0,1,1,1
+db 0,0,1,0,0,1,1,1
+db 0,0,1,0,0,1,1,1
+
+; T
+db 1,0,0,1,1,1,2,1
+db 1,0,1,1,2,1,1,2
+db 0,1,1,1,2,1,1,2
+db 1,0,0,1,1,1,1,2
+
+; L
+db 0,0,0,1,1,1,2,1
+db 1,0,2,0,1,1,1,2
+db 0,1,1,1,2,1,2,2
+db 1,0,1,1,0,2,1,2
+
+; J
+db 2,0,0,1,1,1,2,1
+db 1,0,1,1,1,2,2,2
+db 0,1,1,1,2,1,0,2
+db 0,0,1,0,1,1,1,2
+
+; S
+db 1,0,2,0,0,1,1,1
+db 1,0,1,1,2,1,2,2
+db 1,1,2,1,0,2,1,2
+db 0,0,0,1,1,1,1,2
+
+; Z
+db 0,0,1,0,1,1,2,1
+db 2,0,1,1,2,1,1,2
+db 0,1,1,1,1,2,2,2
+db 1,0,0,1,1,1,0,2
+
+; =========================
 .code
 
-; ============================================================
 start:
+
     mov ax,@data
     mov ds,ax
 
     mov ax,0003h
     int 10h
 
-    call init
+    call init_game
 
 main_loop:
 
@@ -51,8 +123,9 @@ main_loop:
 
     jmp main_loop
 
-; ============================================================
-init proc
+; =========================
+init_game proc
+
     push cx
     push di
 
@@ -64,20 +137,24 @@ init_loop:
     inc di
     loop init_loop
 
-    mov piece_x,4
-    mov piece_y,0
+    mov score,0
+    mov lines,0
+    mov level,1
+
+    call new_piece
 
     pop di
     pop cx
     ret
-init endp
 
-; ============================================================
+init_game endp
+
+; =========================
 input proc
 
     mov ah,01h
     int 16h
-    jz in_end
+    jz input_end
 
     mov ah,00h
     int 16h
@@ -88,46 +165,218 @@ input proc
     je in_right
     cmp al,'s'
     je in_down
+    cmp al,'w'
+    je in_rotate
 
-    jmp in_end
+input_end:
+    ret
 
 in_left:
     dec piece_x
     call collision
-    jc undo_left
-    jmp in_end
-
-undo_left:
+    jc undo_l
+    ret
+undo_l:
     inc piece_x
-    jmp in_end
+    ret
 
 in_right:
     inc piece_x
     call collision
-    jc undo_right
-    jmp in_end
-
-undo_right:
+    jc undo_r
+    ret
+undo_r:
     dec piece_x
-    jmp in_end
+    ret
 
 in_down:
     inc piece_y
     call collision
     jc lock_piece
-    jmp in_end
+    ret
 
-lock_piece:
-    dec piece_y
-    call fix_piece
-    call clear_lines
-    call new_piece
-
-in_end:
+in_rotate:
+    inc piece_rot
+    cmp piece_rot,4
+    jb rot_ok
+    mov piece_rot,0
+rot_ok:
+    call collision
+    jc undo_rot
+    ret
+undo_rot:
+    dec piece_rot
     ret
 
 input endp
+; ============================================================
+get_piece_offset proc
+; OUT: SI apunta a la rotación actual
 
+    push ax
+    push bx
+
+    mov al,piece_type
+    xor ah,ah
+    mov bl,32
+    mul bl        ; AX = tipo * 32
+
+    mov si,ax
+
+    mov al,piece_rot
+    xor ah,ah
+    mov bl,8
+    mul bl        ; AX = rot * 8
+
+    add si,ax
+
+    add si,offset pieces
+
+    pop bx
+    pop ax
+    ret
+
+get_piece_offset endp
+; ============================================================
+collision proc
+
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    call get_piece_offset
+
+    mov cx,4
+    mov di,0
+
+col_check_loop:
+
+    ; X = piece_x + dx
+    mov al,piece_x
+    add al,[si+di]
+    mov bl,al
+
+    ; Y = piece_y + dy
+    mov al,piece_y
+    add al,[si+di+1]
+    mov bh,al
+
+    ; LIMITE X
+    cmp bl,0
+    jl col_fail
+    cmp bl,WIDTH
+    jge col_fail
+
+    ; LIMITE Y
+    cmp bh,HEIGHT
+    jge col_fail
+
+    ; INDEX = y*10 + x
+    xor ax,ax
+    mov al,bh
+    mov dl,10
+    mul dl
+
+    add al,bl
+    mov bx,ax
+
+    cmp board[bx],1
+    je col_fail
+
+    add di,2
+    loop col_check_loop
+
+    clc
+    jmp col_exit
+
+col_fail:
+    stc
+
+col_exit:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+collision endp
+; ============================================================
+fix_piece proc
+
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    call get_piece_offset
+
+    mov cx,4
+    mov di,0
+
+fix_loop_main:
+
+    mov al,piece_x
+    add al,[si+di]
+    mov bl,al
+
+    mov al,piece_y
+    add al,[si+di+1]
+    mov bh,al
+
+    ; index
+    xor ax,ax
+    mov al,bh
+    mov dl,10
+    mul dl
+
+    add al,bl
+    mov bx,ax
+
+    mov board[bx],1
+
+    add di,2
+    loop fix_loop_main
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+fix_piece endp
+; ============================================================
+new_piece proc
+
+    mov piece_x,4
+    mov piece_y,0
+    mov piece_rot,0
+
+    ; pseudo random (simple pero estable)
+    mov ah,00h
+    int 1Ah
+    mov al,dl
+    and al,07
+    cmp al,6
+    jbe ok_rand
+    mov al,0
+ok_rand:
+    mov piece_type,al
+
+    call collision
+    jc np_gameover
+
+    ret
+
+np_gameover:
+    mov game_over,1
+    ret
+
+new_piece endp
 ; ============================================================
 update proc
 
@@ -153,241 +402,16 @@ upd_lock:
     ret
 
 update endp
-
-; ============================================================
-collision proc
-
-    push ax
-    push bx
-    push cx
-    push si
-
-    mov si,0
-    mov cx,4
-
-col_loop:
-
-    mov al,piece_x
-    add al,piece[si]
-    mov bl,al
-
-    mov al,piece_y
-    add al,piece[si+1]
-    mov bh,al
-
-    cmp bl,0
-    jl col_fail
-    cmp bl,WIDTH
-    jge col_fail
-
-    cmp bh,HEIGHT
-    jge col_fail
-
-    xor ax,ax
-    mov al,bh
-    mov cl,10
-    mul cl
-
-    add al,bl
-    mov bx,ax
-
-    cmp board[bx],1
-    je col_fail
-
-    add si,2
-    dec cx
-    jnz col_loop
-
-    clc
-    jmp col_exit
-
-col_fail:
-    stc
-
-col_exit:
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-collision endp
-
-; ============================================================
-fix_piece proc
-
-    push ax
-    push bx
-    push cx
-    push si
-
-    mov si,0
-    mov cx,4
-
-fix_loop:
-
-    mov al,piece_x
-    add al,piece[si]
-    mov bl,al
-
-    mov al,piece_y
-    add al,piece[si+1]
-    mov bh,al
-
-    xor ax,ax
-    mov al,bh
-    mov cl,10
-    mul cl
-
-    add al,bl
-    mov bx,ax
-
-    mov board[bx],1
-
-    add si,2
-    dec cx
-    jnz fix_loop
-
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-fix_piece endp
-
-; ============================================================
-clear_lines proc
-
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov cx,HEIGHT
-    mov bx,0
-
-cl_row:
-
-    push cx
-
-    mov cx,WIDTH
-    mov dx,0
-
-cl_cells:
-
-    cmp board[bx],1
-    jne cl_notfull
-
-    inc dx
-    inc bx
-    dec cx
-    jnz cl_cells
-
-    cmp dx,WIDTH
-    jne cl_notfull
-
-    sub bx,WIDTH
-    call remove_row
-
-    inc lines
-    add score,100
-
-cl_notfull:
-    add bx,WIDTH
-
-    pop cx
-    dec cx
-    jnz cl_row
-
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-clear_lines endp
-
-; ============================================================
-remove_row proc
-
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-
-rr_shift:
-
-    cmp bx,0
-    je rr_clear
-
-    mov cx,WIDTH
-
-rr_copy:
-
-    mov di,bx
-
-    mov ax,bx
-    sub ax,WIDTH
-    mov si,ax
-
-    mov al,board[si]
-    mov board[di],al
-
-    inc bx
-    dec cx
-    jnz rr_copy
-
-    sub bx,WIDTH
-    jmp rr_shift
-
-rr_clear:
-
-    mov bx,0
-    mov cx,WIDTH
-
-rr_clr:
-
-    mov board[bx],0
-    inc bx
-    dec cx
-    jnz rr_clr
-
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-remove_row endp
-
-; ============================================================
-new_piece proc
-
-    mov piece_x,4
-    mov piece_y,0
-
-    call collision
-    jc np_gameover
-
-    ret
-
-np_gameover:
-    mov game_over,1
-    ret
-
-new_piece endp
-
 ; ============================================================
 render proc
+
     call draw_board
     call draw_piece
-    call draw_ui
-    ret
-render endp
+    call draw_ui_data
 
+    ret
+
+render endp
 ; ============================================================
 draw_board proc
 
@@ -398,28 +422,26 @@ draw_board proc
 
     mov bx,0
     mov dh,3
-    mov cx,HEIGHT
+    mov cx,20
 
-db_row:
+db_row_loop:
 
     push cx
+    mov cx,10
     mov dl,2
-    mov cx,WIDTH
 
-db_col:
+db_col_loop:
 
     mov ah,02h
-    mov bh,0
     int 10h
 
-    mov al,board[bx]
-
-    cmp al,1
+    cmp board[bx],1
     jne db_empty
 
+    ; BLOQUE LLENO
     mov ah,09h
     mov al,219
-    mov bl,0Ah
+    mov bl,0Ch
     mov cx,1
     int 10h
     jmp db_next
@@ -434,15 +456,11 @@ db_empty:
 db_next:
     inc dl
     inc bx
-
-    dec cx
-    jnz db_col
+    loop db_col_loop
 
     inc dh
-
     pop cx
-    dec cx
-    jnz db_row
+    loop db_row_loop
 
     pop dx
     pop cx
@@ -451,7 +469,6 @@ db_next:
     ret
 
 draw_board endp
-
 ; ============================================================
 draw_piece proc
 
@@ -461,34 +478,34 @@ draw_piece proc
     push dx
     push si
 
-    mov si,0
-    mov cx,4
+    call get_piece_offset
 
-dp_loop:
+    mov cx,4
+    mov di,0
+
+dp_loop_main:
 
     mov al,piece_y
-    add al,piece[si+1]
+    add al,[si+di+1]
     add al,3
     mov dh,al
 
     mov al,piece_x
-    add al,piece[si]
+    add al,[si+di]
     add al,2
     mov dl,al
 
     mov ah,02h
-    mov bh,0
     int 10h
 
     mov ah,09h
     mov al,219
-    mov bl,0Ch
+    mov bl,0Ah
     mov cx,1
     int 10h
 
-    add si,2
-    dec cx
-    jnz dp_loop
+    add di,2
+    loop dp_loop_main
 
     pop si
     pop dx
@@ -498,13 +515,135 @@ dp_loop:
     ret
 
 draw_piece endp
-
 ; ============================================================
-draw_ui proc
+clear_lines proc
+
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov dh,0          ; fila
+
+cl_row_loop:
+
+    cmp dh,20
+    jge cl_done
+
+    ; calcular inicio fila
+    xor ax,ax
+    mov al,dh
+    mov bl,10
+    mul bl
+    mov bx,ax
+
+    mov cx,10
+    mov dl,0          ; contador
+
+cl_check_cells:
+
+    cmp board[bx],1
+    jne cl_not_full
+
+    inc dl
+    inc bx
+    loop cl_check_cells
+
+    cmp dl,10
+    jne cl_not_full
+
+    ; ==== FILA COMPLETA ====
+    call remove_line
+
+    inc lines
+    add score,100
+
+    jmp cl_row_loop
+
+cl_not_full:
+    inc dh
+    jmp cl_row_loop
+
+cl_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+clear_lines endp
+; ============================================================
+remove_line proc
+
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; dh = fila a eliminar
+
+rl_shift_rows:
+
+    cmp dh,0
+    je rl_clear_top
+
+    ; destino = fila actual
+    xor ax,ax
+    mov al,dh
+    mov bl,10
+    mul bl
+    mov si,ax
+
+    ; fuente = fila-1
+    mov al,dh
+    dec al
+    mov bl,10
+    mul bl
+    mov di,ax
+
+    mov cx,10
+
+rl_copy_loop:
+
+    mov al,board[di]
+    mov board[si],al
+
+    inc si
+    inc di
+    loop rl_copy_loop
+
+    dec dh
+    jmp rl_shift_rows
+
+rl_clear_top:
+
+    mov cx,10
+    mov bx,0
+
+rl_clear_loop:
+
+    mov board[bx],0
+    inc bx
+    loop rl_clear_loop
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+remove_line endp
+; ============================================================
+draw_ui_data proc
 
     push ax
     push dx
 
+    ; SCORE
     mov ah,02h
     mov dh,0
     mov dl,0
@@ -520,6 +659,7 @@ draw_ui proc
     mov ax,score
     call print_num
 
+    ; LINES
     mov ah,02h
     mov dh,1
     mov dl,0
@@ -535,28 +675,11 @@ draw_ui proc
     mov ax,lines
     call print_num
 
-    mov ah,02h
-    mov dh,2
-    mov dl,0
-    int 10h
-    mov dx,offset msg_level
-    mov ah,09h
-    int 21h
-
-    mov ah,02h
-    mov dh,2
-    mov dl,8
-    int 10h
-    xor ax,ax
-    mov al,level
-    call print_num
-
     pop dx
     pop ax
     ret
 
-draw_ui endp
-
+draw_ui_data endp
 ; ============================================================
 print_num proc
 
@@ -568,21 +691,20 @@ print_num proc
     mov bx,10
     xor cx,cx
 
-pn1:
+pn_loop1:
     xor dx,dx
     div bx
     push dx
     inc cx
     cmp ax,0
-    jne pn1
+    jne pn_loop1
 
-pn2:
+pn_loop2:
     pop dx
     add dl,'0'
     mov ah,02h
     int 21h
-    dec cx
-    jnz pn2
+    loop pn_loop2
 
     pop dx
     pop cx
@@ -591,34 +713,25 @@ pn2:
     ret
 
 print_num endp
-
 ; ============================================================
 delay proc
-    push cx
-    mov cx,4000
-d_loop:
-    dec cx
-    jnz d_loop
-    pop cx
-    ret
-delay endp
 
-; ============================================================
-end_game:
-
-    mov ah,02h
-    mov dh,12
-    mov dl,30
-    int 10h
-
-    mov dx,offset msg_over
-    mov ah,09h
-    int 21h
+    push ax
+    push dx
 
     mov ah,00h
-    int 16h
+    int 1Ah
+    mov bx,dx
 
-    mov ax,4C00h
-    int 21h
+delay_wait:
 
-end start
+    mov ah,00h
+    int 1Ah
+    cmp dx,bx
+    je delay_wait
+
+    pop dx
+    pop ax
+    ret
+
+delay endp
