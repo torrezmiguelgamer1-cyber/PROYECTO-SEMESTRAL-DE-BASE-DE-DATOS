@@ -430,17 +430,16 @@ draw_board proc
 
     mov bx,0
     mov dh,3
-
     mov cx,HEIGHT
 
-row_loop:
+db_row_loop:
 
     push cx
 
     mov dl,2
     mov cx,WIDTH
 
-col_loop:
+db_col_loop:
 
     mov ah,02h
     mov bh,0
@@ -449,35 +448,34 @@ col_loop:
     mov al,board[bx]
 
     cmp al,1
-    jne empty_cell
+    jne db_empty
 
     mov ah,09h
     mov al,219
     mov bl,0Ah
     mov cx,1
     int 10h
-    jmp next_cell
+    jmp db_next
 
-empty_cell:
+db_empty:
     mov ah,09h
     mov al,'.'
     mov bl,07h
     mov cx,1
     int 10h
 
-next_cell:
-
+db_next:
     inc dl
     inc bx
 
     dec cx
-    jnz col_loop
+    jnz db_col_loop
 
     inc dh
 
     pop cx
     dec cx
-    jnz row_loop
+    jnz db_row_loop
 
     pop dx
     pop cx
@@ -639,39 +637,38 @@ clear_lines proc
     mov cx,HEIGHT
     mov bx,0
 
-row_check:
+cl_row_loop:
 
     push cx
 
     mov cx,WIDTH
     mov dx,0
 
-cell_check:
+cl_cell_loop:
 
     cmp board[bx],1
-    jne not_full
+    jne cl_not_full
 
     inc dx
     inc bx
     dec cx
-    jnz cell_check
+    jnz cl_cell_loop
 
     cmp dx,WIDTH
-    jne not_full
+    jne cl_not_full
 
-    ; fila llena
     sub bx,WIDTH
     call remove_row
 
     inc lines
     add score,100
 
-not_full:
+cl_not_full:
     add bx,WIDTH
 
     pop cx
     dec cx
-    jnz row_check
+    jnz cl_row_loop
 
     pop dx
     pop cx
@@ -686,18 +683,17 @@ remove_row proc
     push ax
     push bx
     push cx
-    push dx
     push si
     push di
 
-shift_loop:
+rr_shift_loop:
 
     cmp bx,0
-    je clear_top
+    je rr_clear_top
 
     mov cx,WIDTH
 
-copy_cells:
+rr_copy_loop:
 
     mov di,bx
 
@@ -710,25 +706,24 @@ copy_cells:
 
     inc bx
     dec cx
-    jnz copy_cells
+    jnz rr_copy_loop
 
     sub bx,WIDTH
-    jmp shift_loop
+    jmp rr_shift_loop
 
-clear_top:
+rr_clear_top:
 
     mov bx,0
     mov cx,WIDTH
 
-clear_cells:
+rr_clear_loop:
     mov board[bx],0
     inc bx
     dec cx
-    jnz clear_cells
+    jnz rr_clear_loop
 
     pop di
     pop si
-    pop dx
     pop cx
     pop bx
     pop ax
