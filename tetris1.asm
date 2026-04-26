@@ -3,9 +3,6 @@
 
 .data
 
-; =========================
-; CONSTANTES
-; =========================
 WIDTH  equ 10
 HEIGHT equ 20
 
@@ -20,22 +17,46 @@ board db 200 dup(0)
 piece_x db 4
 piece_y db 0
 
-; pieza cuadrado (base estable)
-piece_shape db 0,0, 1,0, 0,1, 1,1
+piece_type db 0
 
 ; =========================
-; VARIABLES DE JUEGO
+; PIEZAS (COORDENADAS)
+; =========================
+
+; O
+piece_O db 0,0, 1,0, 0,1, 1,1
+
+; I
+piece_I db 0,0, 1,0, 2,0, 3,0
+
+; T
+piece_T db 1,0, 0,1, 1,1, 2,1
+
+; L
+piece_L db 0,0, 0,1, 1,1, 2,1
+
+; J
+piece_J db 2,0, 0,1, 1,1, 2,1
+
+; S
+piece_S db 1,0, 2,0, 0,1, 1,1
+
+; Z
+piece_Z db 0,0, 1,0, 1,1, 2,1
+
+; buffer actual
+current_piece db 8 dup(0)
+
+; =========================
+; VARIABLES
 ; =========================
 score dw 0
 lines dw 0
 level db 1
-
 game_over db 0
 
 tick dw 0
 speed dw 8
-
-last_time dw 0
 
 ; =========================
 ; TEXTOS
@@ -47,28 +68,29 @@ msg_over  db 'GAME OVER$'
 
 .code
 
-; =========================
 start:
     mov ax,@data
     mov ds,ax
 
-    ; MODO TEXTO (DOSBOX)
     mov ax,0003h
     int 10h
 
-    call init
+    call init_game
     call draw_ui
 
 main_loop:
 
-    call wait_tick      ; reloj estable
-    call input
-    call update
-    call render
-
     cmp game_over,1
-    jne main_loop
+    je end_game
 
+    call read_input
+    call update_game
+    call render_all
+    call delay_big
+
+    jmp main_loop
+
+end_game:
     call show_game_over
 
     mov ah,00h
@@ -76,120 +98,173 @@ main_loop:
 
     mov ax,4C00h
     int 21h
-
 ; =========================
-; TIMER REAL (NO BUG)
-; =========================
-wait_tick proc
-    push ax
-    push dx
+init_game proc
 
-wt_loop:
-    mov ah,00h
-    int 1Ah
-
-    cmp dx,last_time
-    je wt_loop
-
-    mov last_time,dx
-
-    pop dx
-    pop ax
-    ret
-wait_tick endp
-
-; =========================
-; INICIALIZAR JUEGO
-; =========================
-init proc
     push cx
-    push di
+    push bx
 
     mov cx,200
-    mov di,0
+    mov bx,0
 
-clear_board:
-    mov board[di],0
-    inc di
-    loop clear_board
+init_loop:
+    mov board[bx],0
+    inc bx
+    loop init_loop
+
+    mov piece_x,4
+    mov piece_y,0
+    mov piece_type,0
+
+    mov score,0
+    mov lines,0
+    mov level,1
+    mov game_over,0
+
+    call spawn_piece
+
+    pop bx
+    pop cx
+    ret
+init_game endp
+; =========================
+spawn_piece proc
+
+    push ax
+    push si
+    push di
+    push cx
+
+    ; cambiar tipo
+    mov al,piece_type
+    inc al
+    cmp al,7
+    jb ok_type
+    mov al,0
+ok_type:
+    mov piece_type,al
 
     mov piece_x,4
     mov piece_y,0
 
-    pop di
+    ; seleccionar pieza
+    cmp piece_type,0
+    je pO
+    cmp piece_type,1
+    je pI
+    cmp piece_type,2
+    je pT
+    cmp piece_type,3
+    je pL
+    cmp piece_type,4
+    je pJ
+    cmp piece_type,5
+    je pS
+    jmp pZ
+
+pO: mov si,offset piece_O
+    jmp copy
+pI: mov si,offset piece_I
+    jmp copy
+pT: mov si,offset piece_T
+    jmp copy
+pL: mov si,offset piece_L
+    jmp copy
+pJ: mov si,offset piece_J
+    jmp copy
+pS: mov si,offset piece_S
+    jmp copy
+pZ: mov si,offset piece_Z
+
+copy:
+    mov cx,8
+    mov di,0
+
+copy_loop:
+    mov al,[si]
+    mov current_piece[di],al
+    inc si
+    inc di
+    loop copy_loop
+
     pop cx
+    pop di
+    pop si
+    pop ax
     ret
-init endp
+spawn_piece endp
 ; =========================
-; INPUT (NO BLOQUEANTE)
-; =========================
-input proc
-    push ax
+read_input proc
 
     mov ah,01h
     int 16h
-    jz input_end   ; no hay tecla
+    jz no_key
 
     mov ah,00h
     int 16h
 
+    ; IZQUIERDA
     cmp al,'a'
     je move_left
 
+    ; DERECHA
     cmp al,'d'
     je move_right
 
+    ; ABAJO (caída rápida)
     cmp al,'s'
     je move_down
 
-input_end:
-    pop ax
+    ; ROTAR (lo dejamos preparado)
+    cmp al,'w'
+    je rotate_piece
+
+no_key:
     ret
 
 ; -------------------------
 move_left:
     dec piece_x
-    call collision
+    call check_collision
     jc undo_left
-    jmp input_exit
-
+    ret
 undo_left:
     inc piece_x
-    jmp input_exit
+    ret
 
 ; -------------------------
 move_right:
     inc piece_x
-    call collision
+    call check_collision
     jc undo_right
-    jmp input_exit
-
+    ret
 undo_right:
     dec piece_x
-    jmp input_exit
+    ret
 
 ; -------------------------
 move_down:
     inc piece_y
-    call collision
-    jc fix_current_piece
-    jmp input_exit
+    call check_collision
+    jc lock_piece_input
+    ret
 
-; -------------------------
-fix_current_piece:
+lock_piece_input:
     dec piece_y
     call fix_piece
-    call clear_lines
-    call spawn_new_piece
-
-input_exit:
-    pop ax
+    call clear_lines_full
+    call spawn_piece
     ret
-input endp
+
+; -------------------------
+rotate_piece:
+    ; lo implementamos en parte 4
+    ret
+
+read_input endp
 ; =========================
-; UPDATE (CAÍDA AUTOMÁTICA)
-; =========================
-update proc
+update_game proc
+
     push ax
 
     inc tick
@@ -199,26 +274,42 @@ update proc
 
     mov tick,0
 
+    ; bajar pieza automáticamente
     inc piece_y
-    call collision
-    jc lock_piece
+    call check_collision
+    jc auto_lock
 
     jmp update_end
 
-lock_piece:
+auto_lock:
     dec piece_y
     call fix_piece
-    call clear_lines
-    call spawn_new_piece
+    call clear_lines_full
+    call spawn_piece
 
 update_end:
     pop ax
     ret
-update endp
+
+update_game endp
 ; =========================
-; COLISIÓN (VERSIÓN SEGURA)
+delay_big proc
+
+    push cx
+
+    mov cx,40000   ; ajusta velocidad aquí
+
+delay_loop:
+    nop
+    loop delay_loop
+
+    pop cx
+    ret
+
+delay_big endp
 ; =========================
-collision proc
+check_collision proc
+
     push ax
     push bx
     push cx
@@ -228,66 +319,66 @@ collision proc
     mov cx,4
     mov si,0
 
-col_loop:
+collision_loop:
 
-    ; ===== X =====
+    ; X = piece_x + offset
     xor ax,ax
     mov al,piece_x
-    add al,piece_shape[si]
+    add al,current_piece[si]
     mov bl,al
 
-    ; ===== Y =====
+    ; Y = piece_y + offset
     xor ax,ax
     mov al,piece_y
-    add al,piece_shape[si+1]
+    add al,current_piece[si+1]
     mov bh,al
 
-    ; ===== límites =====
+    ; limites X
     cmp bl,0
-    jl col_fail
-
+    jl collision_fail
     cmp bl,WIDTH
-    jge col_fail
+    jge collision_fail
 
+    ; limites Y
     cmp bh,HEIGHT
-    jge col_fail
+    jge collision_fail
 
-    ; ===== index = y*WIDTH + x =====
+    ; índice = y*10 + x
     xor ax,ax
     mov al,bh
-    mov cl,WIDTH
-    mul cl          ; AX = y*WIDTH
+    mov dl,10
+    mul dl        ; AX = y*10
 
     xor dx,dx
     mov dl,bl
-    add ax,dx       ; AX = índice final
+    add ax,dx     ; AX = index
 
-    mov bx,ax       ; ✔ usar BX SIEMPRE
+    mov bx,ax
 
     cmp board[bx],1
-    je col_fail
+    je collision_fail
 
     add si,2
-    loop col_loop
+    loop collision_loop
 
     clc
-    jmp col_exit
+    jmp collision_exit
 
-col_fail:
+collision_fail:
     stc
 
-col_exit:
+collision_exit:
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
-collision endp
-; =========================
-; FIJAR PIEZA
+
+check_collision endp
 ; =========================
 fix_piece proc
+
     push ax
     push bx
     push cx
@@ -302,27 +393,27 @@ fix_loop:
     ; X
     xor ax,ax
     mov al,piece_x
-    add al,piece_shape[si]
+    add al,current_piece[si]
     mov bl,al
 
     ; Y
     xor ax,ax
     mov al,piece_y
-    add al,piece_shape[si+1]
+    add al,current_piece[si+1]
     mov bh,al
 
-    ; index
+    ; index = y*10 + x
     xor ax,ax
     mov al,bh
-    mov cl,WIDTH
-    mul cl
+    mov dl,10
+    mul dl
 
     xor dx,dx
     mov dl,bl
     add ax,dx
 
     mov bx,ax
-    mov board[bx],1   ; ✔ correcto
+    mov board[bx],1
 
     add si,2
     loop fix_loop
@@ -333,36 +424,65 @@ fix_loop:
     pop bx
     pop ax
     ret
+
 fix_piece endp
 ; =========================
-; NUEVA PIEZA
-; =========================
-spawn_new_piece proc
-    mov piece_x,4
-    mov piece_y,0
+clear_lines_full proc
 
-    call collision
-    jc game_over_set
+    push ax
+    push bx
+    push cx
+    push dx
 
+    mov cx,HEIGHT
+    mov bx,0
+
+row_loop:
+
+    push cx
+
+    mov cx,WIDTH
+    mov dx,0
+
+cell_loop:
+    cmp board[bx],1
+    jne not_full_row
+    inc dx
+    inc bx
+    loop cell_loop
+
+    cmp dx,WIDTH
+    jne not_full_row
+
+    ; eliminar fila
+    sub bx,WIDTH
+    call remove_row
+
+    inc lines
+    add score,100
+
+not_full_row:
+    add bx,WIDTH
+    pop cx
+    loop row_loop
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
-game_over_set:
-    mov game_over,1
-    ret
-spawn_new_piece endp
+clear_lines_full endp
 ; =========================
-; RENDER GENERAL
-; =========================
-render proc
+render_all proc
     call draw_board
     call draw_piece
     call draw_info
     ret
-render endp
-; =========================
-; DIBUJAR TABLERO
+render_all endp
 ; =========================
 draw_board proc
+
     push ax
     push bx
     push cx
@@ -372,24 +492,27 @@ draw_board proc
     mov dh,3          ; fila pantalla
     mov cx,HEIGHT
 
-row_loop:
+row_loop_db:
     push cx
 
     mov dl,2
     mov cx,WIDTH
 
-col_loop:
+col_loop_db:
+
     ; posicion cursor
     mov ah,02h
     int 10h
 
-    cmp board[bx],1
+    mov al,board[bx]
+
+    cmp al,1
     jne empty_cell
 
-    ; bloque lleno
+    ; bloque
     mov ah,09h
     mov al,219
-    mov bl,0Ch
+    mov bl,0Ah
     mov cx,1
     int 10h
     jmp next_cell
@@ -404,22 +527,22 @@ empty_cell:
 next_cell:
     inc dl
     inc bx
-    loop col_loop
+    loop col_loop_db
 
     inc dh
     pop cx
-    loop row_loop
+    loop row_loop_db
 
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+
 draw_board endp
 ; =========================
-; DIBUJAR PIEZA
-; =========================
 draw_piece proc
+
     push ax
     push bx
     push cx
@@ -429,19 +552,19 @@ draw_piece proc
     mov cx,4
     mov si,0
 
-piece_loop:
+dp_loop:
 
-    ; Y pantalla
+    ; Y
     xor ax,ax
     mov al,piece_y
-    add al,piece_shape[si+1]
+    add al,current_piece[si+1]
     add al,3
     mov dh,al
 
-    ; X pantalla
+    ; X
     xor ax,ax
     mov al,piece_x
-    add al,piece_shape[si]
+    add al,current_piece[si]
     add al,2
     mov dl,al
 
@@ -450,12 +573,12 @@ piece_loop:
 
     mov ah,09h
     mov al,219
-    mov bl,0Ah
+    mov bl,0Ch
     mov cx,1
     int 10h
 
     add si,2
-    loop piece_loop
+    loop dp_loop
 
     pop si
     pop dx
@@ -463,11 +586,11 @@ piece_loop:
     pop bx
     pop ax
     ret
+
 draw_piece endp
 ; =========================
-; UI FIJA
-; =========================
 draw_ui proc
+
     mov ah,02h
     mov dh,0
     mov dl,0
@@ -495,9 +618,8 @@ draw_ui proc
     ret
 draw_ui endp
 ; =========================
-; DIBUJAR INFO
-; =========================
 draw_info proc
+
     push ax
     push dx
 
@@ -529,11 +651,11 @@ draw_info proc
     pop dx
     pop ax
     ret
+
 draw_info endp
 ; =========================
-; PRINT NUM
-; =========================
 print_num proc
+
     push ax
     push bx
     push cx
@@ -562,105 +684,68 @@ pn2:
     pop bx
     pop ax
     ret
+
 print_num endp
 ; =========================
-; CLEAR LINES REAL
-; =========================
-clear_lines proc
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov bx,0          ; índice fila
-
-row_check:
-    mov cx,WIDTH
-    mov si,bx
-    xor dx,dx         ; contador
-
-check_loop:
-    cmp board[si],1
-    jne not_full
-    inc dx
-    inc si
-    loop check_loop
-
-    cmp dx,WIDTH
-    jne next_row
-
-    ; ===== fila llena =====
-    call remove_row
-
-    inc lines
-    add score,100
-
-next_row:
-    add bx,WIDTH
-    cmp bx,200
-    jl row_check
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-clear_lines endp
-; =========================
-; ELIMINAR FILA Y BAJAR
-; =========================
 remove_row proc
+
     push ax
     push bx
     push cx
     push dx
     push si
+    push di
 
-    mov dx,bx    ; fila actual
+    ; BX = inicio de la fila a eliminar
 
-shift_loop:
-    cmp dx,0
-    jle clear_top
+shift_rows:
+
+    cmp bx,0
+    je clear_top
 
     mov cx,WIDTH
 
 copy_loop:
-    mov ax,dx
+
+    ; destino
+    mov di,bx
+
+    ; fuente = fila superior
+    mov ax,bx
     sub ax,WIDTH
     mov si,ax
+
     mov al,board[si]
+    mov board[di],al
 
-    mov si,dx
-    mov board[si],al
-
-    inc dx
+    inc bx
     loop copy_loop
 
-    sub dx,WIDTH
-    jmp shift_loop
+    sub bx,WIDTH
+    jmp shift_rows
 
 clear_top:
+
     mov cx,WIDTH
     mov bx,0
 
-top_clear:
+clear_loop:
     mov board[bx],0
     inc bx
-    loop top_clear
+    loop clear_loop
 
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+
 remove_row endp
 ; =========================
-; GAME OVER
-; =========================
 show_game_over proc
+
     mov ah,02h
     mov dh,12
     mov dl,30
@@ -669,6 +754,8 @@ show_game_over proc
     mov dx,offset msg_over
     mov ah,09h
     int 21h
+
     ret
+
 show_game_over endp
 end start
